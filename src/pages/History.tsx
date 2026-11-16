@@ -4,6 +4,7 @@ import { IconChevron } from '../components/icons';
 import { formatDate } from '../model';
 import { fmtW, valid } from '../stats';
 import { useStore } from '../store';
+import Heatmap from '../components/Heatmap';
 
 export default function HistoryPage({ onOpen }: { onOpen: (dayId: string, date: string) => void }) {
   const { program, sessions } = useStore();
@@ -32,6 +33,7 @@ export default function HistoryPage({ onOpen }: { onOpen: (dayId: string, date: 
   return (
     <div className="fade-up">
       <Header title="История" subtitle={`${list.length} тренировок`} />
+      <Heatmap sessions={list} />
       {[...groups.entries()].map(([month, items]) => {
         const [y, m] = month.split('-').map(Number);
         const label = new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });

@@ -5,6 +5,7 @@ export interface Exercise {
   name: string;
   targetSets: number;
   targetReps: number;
+  note?: string;
   archived?: boolean;
 }
 

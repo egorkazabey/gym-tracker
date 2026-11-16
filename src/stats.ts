@@ -181,3 +181,35 @@ export function streakWeeks(sessions: Session[], today: string): number {
   }
   return n;
 }
+
+// ---------- Plates ----------
+
+export const PLATES = [25, 20, 15, 10, 5, 2.5, 1.25];
+
+/** Greedy plates per side for a barbell. `rest` > 0 means the exact weight can't be built. */
+export function platesPerSide(total: number, bar = 20, plates = PLATES): { plates: number[]; rest: number } {
+  let side = Math.round(((total - bar) / 2) * 100) / 100;
+  if (side <= 0) return { plates: [], rest: Math.max(0, side) };
+  const out: number[] = [];
+  for (const p of plates) {
+    while (side >= p - 1e-9) {
+      out.push(p);
+      side = Math.round((side - p) * 100) / 100;
+    }
+  }
+  return { plates: out, rest: side };
+}
+
+/** Classic warm-up ramp towards a working weight, rounded to 2.5 kg. */
+export function warmupSets(work: number, bar = 20): SetEntry[] {
+  if (work <= bar) return [];
+  const r = (x: number) => Math.round(x / 2.5) * 2.5;
+  const ramp: SetEntry[] = [[bar, 10], [r(work * 0.5), 5], [r(work * 0.7), 3], [r(work * 0.85), 2]];
+  const out: SetEntry[] = [];
+  for (const [w, reps] of ramp) {
+    if (w < bar || w >= work) continue;
+    if (out.some(([x]) => x === w)) continue;
+    out.push([w, reps]);
+  }
+  return out;
+}

@@ -4,6 +4,7 @@ import { Button, Card, Header } from '../components/ui';
 import { IconCheck, IconPlus, IconTimer, IconTrash } from '../components/icons';
 import { formatDate, round, sessionKey, todayISO, WEEKDAYS_FULL, type Exercise, type Session, type SetEntry } from '../model';
 import { fmtW, lastSetsBefore, prevMaxWeight, sessionSummary, suggestWeight } from '../stats';
+import PlateSheet from '../components/PlateSheet';
 import { deleteSession, getState, upsertSession, useStore } from '../store';
 import { confirmDialog, haptic, inTelegram, tg } from '../tg';
 
@@ -164,6 +165,7 @@ function ExerciseCard({
   const prevMax = prevMaxWeight(sessions, ex.id, date);
   const rows = Math.max(ex.targetSets, sets.length);
   const suggested = suggestWeight(last?.sets, ex.targetSets, ex.targetReps);
+  const [platesFor, setPlatesFor] = useState<number | null>(null);
 
   const hint = (i: number): SetEntry | undefined => {
     if (suggested && i < ex.targetSets) return [suggested, ex.targetReps];
@@ -186,6 +188,7 @@ function ExerciseCard({
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="font-bold">{ex.name}</div>
+          {ex.note && <div className="mb-0.5 text-xs text-fg/70">📝 {ex.note}</div>}
           <div className="text-xs text-muted">
             {last
               ? `${formatDate(last.date)}: ${last.sets.map(([w, r]) => `${fmtW(w)}×${r}`).join(', ')}`
@@ -237,19 +240,46 @@ function ExerciseCard({
           />
         ))}
       </div>
-      <button
-        onClick={() => {
-          haptic.tap();
-          update((s) => {
-            while (s.length < rows) s.push([0, 0]);
-            s.push([0, 0]);
-            return s;
-          });
-        }}
-        className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-semibold text-muted transition active:bg-card2"
-      >
-        <IconPlus size={16} /> Подход
-      </button>
+      <div className="mt-2 flex gap-2">
+        <button
+          onClick={() => {
+            haptic.tap();
+            update((s) => {
+              while (s.length < rows) s.push([0, 0]);
+              s.push([0, 0]);
+              return s;
+            });
+          }}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-semibold text-muted transition active:bg-card2"
+        >
+          <IconPlus size={16} /> Подход
+        </button>
+        {last && !sets.some(([w, r]) => w > 0 || r > 0) && (
+          <button
+            onClick={() => {
+              haptic.medium();
+              const base: SetEntry[] = suggested
+                ? last.sets.map(([w, r], i) => (i < ex.targetSets ? [suggested, Math.max(r, ex.targetReps)] : [w, r]))
+                : last.sets;
+              update(() => base.map(([w, r]) => [w, r] as SetEntry));
+            }}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-card2 py-2 text-sm font-semibold text-fg transition active:scale-[0.97]"
+          >
+            ↻ {suggested ? 'С прибавкой' : 'Как в прошлый раз'}
+          </button>
+        )}
+        <button
+          onClick={() => {
+            haptic.tap();
+            setPlatesFor(Math.max(...sets.map(([w]) => w), 0) || hint(0)?.[0] || 60);
+          }}
+          className="flex items-center justify-center rounded-xl bg-card2 px-3 py-2 text-sm font-semibold text-muted transition active:scale-[0.97]"
+          title="Калькулятор блинов"
+        >
+          🏋️
+        </button>
+      </div>
+      {platesFor != null && createPortal(<PlateSheet initial={platesFor} onClose={() => setPlatesFor(null)} />, document.body)}
     </Card>
   );
 }

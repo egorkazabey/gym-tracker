@@ -4,6 +4,7 @@ import { Card, Chip, Empty, Header, Input, Stat } from '../components/ui';
 import { formatDate, todayISO, WEEKDAYS } from '../model';
 import { exerciseHistory, fmtW, records, sessionSummary, streakWeeks, valid, weeklyVolume, type ExercisePoint } from '../stats';
 import { useStore } from '../store';
+import BodyWeightCard from '../components/BodyWeightCard';
 
 type Metric = 'maxWeight' | 'best1rm' | 'volume';
 const METRICS: { id: Metric; label: string; unit: string }[] = [
@@ -40,14 +41,6 @@ export default function StatsPage() {
   const first = history[0];
   const delta = last && first && history.length > 1 ? last.maxWeight - first.maxWeight : 0;
 
-  if (!allExercises.length) {
-    return (
-      <div className="fade-up">
-        <Header title="Статистика" subtitle="Прогресс" />
-        <Empty icon="📈" title="Нет данных" text="Добавь упражнения в программу и проведи первую тренировку — здесь появятся графики." />
-      </div>
-    );
-  }
 
   const m = METRICS.find((x) => x.id === metric)!;
 
@@ -253,7 +246,12 @@ function Overview() {
   );
 
   if (!logged.length) {
-    return <Empty icon="🔥" title="Начни первую тренировку" text="После первой записанной тренировки здесь появятся стрик, объём по неделям и рекорды." />;
+    return (
+      <div className="space-y-3">
+        <BodyWeightCard />
+        <Empty icon="🔥" title="Начни первую тренировку" text="После первой записанной тренировки здесь появятся стрик, объём по неделям и рекорды." />
+      </div>
+    );
   }
 
   const fmtTons = (kg: number) => (kg >= 10000 ? `${(kg / 1000).toFixed(1)}` : kg.toLocaleString('ru-RU'));
@@ -273,6 +271,8 @@ function Overview() {
           </div>
         </div>
       </div>
+
+      <BodyWeightCard />
 
       <div className="grid grid-cols-3 gap-2">
         <Stat label="Всего" value={logged.length} />

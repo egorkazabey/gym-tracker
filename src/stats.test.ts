@@ -90,3 +90,19 @@ describe('extras', () => {
     expect(wv[3].week).toBe('2026-11-16');
   });
 });
+
+import { platesPerSide, warmupSets } from './stats';
+
+describe('plates', () => {
+  it('builds plates per side', () => {
+    expect(platesPerSide(100)).toEqual({ plates: [25, 15], rest: 0 });
+    expect(platesPerSide(82.5)).toEqual({ plates: [25, 5, 1.25], rest: 0 });
+    expect(platesPerSide(20).plates).toEqual([]);
+    expect(platesPerSide(21).rest).toBe(0.5);
+  });
+  it('ramps warm-up sets', () => {
+    expect(warmupSets(100)).toEqual([[20, 10], [50, 5], [70, 3], [85, 2]]);
+    expect(warmupSets(30)).toEqual([[20, 10], [25, 2]]);
+    expect(warmupSets(20)).toEqual([]);
+  });
+});

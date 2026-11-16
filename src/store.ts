@@ -6,16 +6,22 @@ interface State {
   loaded: boolean;
   program: Program;
   sessions: Session[]; // newest first
+  bodyweight: BodyWeight[]; // oldest first
   keysUsed: number;
   error: string | null;
 }
 
-const CACHE_KEY = 'gym_cache_v1';
-const PROGRAM_COUNT = 'p_n';
-const PROGRAM_CHUNK = (i: number) => `p_${i}`;
-const CHUNK_SIZE = 4000;
+export interface BodyWeight {
+  date: string;
+  kg: number;
+}
 
-let state: State = { loaded: false, program: emptyProgram(), sessions: [], keysUsed: 0, error: null };
+const CACHE_KEY = 'gym_cache_v1';
+const CHUNK_SIZE = 4000;
+const countKey = (prefix: string) => `${prefix}_n`;
+const chunkKey = (prefix: string, i: number) => `${prefix}_${i}`;
+
+let state: State = { loaded: false, program: emptyProgram(), sessions: [], bodyweight: [], keysUsed: 0, error: null };
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<State>) {
@@ -23,7 +29,7 @@ function set(patch: Partial<State>) {
   listeners.forEach((l) => l());
   if (inTelegram && state.loaded) {
     try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ program: state.program, sessions: state.sessions }));
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ program: state.program, sessions: state.sessions, bodyweight: state.bodyweight }));
     } catch {
       /* quota */
     }
@@ -60,8 +66,8 @@ export async function loadAll() {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
-        const c = JSON.parse(cached) as { program: Program; sessions: Session[] };
-        set({ program: c.program, sessions: c.sessions, loaded: true });
+        const c = JSON.parse(cached) as { program: Program; sessions: Session[]; bodyweight?: BodyWeight[] };
+        set({ program: c.program, sessions: c.sessions, bodyweight: c.bodyweight ?? [], loaded: true });
       }
     } catch {
       /* ignore bad cache */
@@ -71,6 +77,7 @@ export async function loadAll() {
   try {
     const keys = await kv.keys();
     const program = await readProgram(keys);
+    const bodyweight = unpackBodyweight(await readChunked('b', keys));
     const sKeys = keys.filter((k) => k.startsWith(SESSION_PREFIX));
     const raw = await kv.getMany(sKeys);
     const sessions = Object.entries(raw)
@@ -83,18 +90,34 @@ export async function loadAll() {
       const local = state.sessions.find((s) => s.key === k);
       if (local) merged.push(local);
     }
-    set({ program, sessions: sortSessions(merged), keysUsed: keys.length, loaded: true });
+    set({ program, sessions: sortSessions(merged), bodyweight, keysUsed: keys.length, loaded: true });
   } catch (e) {
     console.error(e);
     set({ loaded: true, error: 'Не удалось загрузить данные из Telegram Cloud.' });
   }
 }
 
+async function readChunked(prefix: string, keys: string[]): Promise<string | null> {
+  if (!keys.includes(countKey(prefix))) return null;
+  const n = Number(await kv.get(countKey(prefix))) || 0;
+  const parts = await kv.getMany(Array.from({ length: n }, (_, i) => chunkKey(prefix, i)));
+  return Array.from({ length: n }, (_, i) => parts[chunkKey(prefix, i)] ?? '').join('');
+}
+
+async function writeChunked(prefix: string, json: string) {
+  const prevN = Number(await kv.get(countKey(prefix))) || 0;
+  const parts = chunk(json, CHUNK_SIZE);
+  for (let i = 0; i < parts.length; i++) await kv.set(chunkKey(prefix, i), parts[i]);
+  await kv.set(countKey(prefix), String(parts.length));
+  const stale = [];
+  for (let i = parts.length; i < prevN; i++) stale.push(chunkKey(prefix, i));
+  await kv.remove(stale);
+  void refreshKeyCount();
+}
+
 async function readProgram(keys: string[]): Promise<Program> {
-  if (!keys.includes(PROGRAM_COUNT)) return emptyProgram();
-  const n = Number(await kv.get(PROGRAM_COUNT)) || 0;
-  const parts = await kv.getMany(Array.from({ length: n }, (_, i) => PROGRAM_CHUNK(i)));
-  const json = Array.from({ length: n }, (_, i) => parts[PROGRAM_CHUNK(i)] ?? '').join('');
+  const json = await readChunked('p', keys);
+  if (json == null) return emptyProgram();
   try {
     const p = JSON.parse(json) as Program;
     return p?.days ? p : emptyProgram();
@@ -122,15 +145,38 @@ function flushProgram() {
   programWrite = programWrite.then(() => writeProgram(snapshot)).catch(fail);
 }
 
-async function writeProgram(program: Program) {
-  const prevN = Number(await kv.get(PROGRAM_COUNT)) || 0;
-  const parts = chunk(JSON.stringify(program), CHUNK_SIZE);
-  for (let i = 0; i < parts.length; i++) await kv.set(PROGRAM_CHUNK(i), parts[i]);
-  await kv.set(PROGRAM_COUNT, String(parts.length));
-  const stale = [];
-  for (let i = parts.length; i < prevN; i++) stale.push(PROGRAM_CHUNK(i));
-  await kv.remove(stale);
-  void refreshKeyCount();
+function writeProgram(program: Program) {
+  return writeChunked('p', JSON.stringify(program));
+}
+
+// ---------- Body weight ----------
+// packed as [[20261116, 82.4], ...] to stay compact
+
+export function packBodyweight(list: BodyWeight[]): string {
+  return JSON.stringify(list.map((b) => [Number(b.date.replaceAll('-', '')), b.kg]));
+}
+
+export function unpackBodyweight(raw: string | null): BodyWeight[] {
+  if (!raw) return [];
+  try {
+    return (JSON.parse(raw) as [number, number][])
+      .map(([d, kg]) => {
+        const s = String(d);
+        return { date: `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`, kg };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+  } catch {
+    return [];
+  }
+}
+
+let bwWrite: Promise<void> = Promise.resolve();
+
+export function setBodyweight(date: string, kg: number | null) {
+  const rest = state.bodyweight.filter((b) => b.date !== date);
+  const list = kg ? [...rest, { date, kg }].sort((a, b) => a.date.localeCompare(b.date)) : rest;
+  set({ bodyweight: list });
+  bwWrite = bwWrite.then(() => writeChunked('b', packBodyweight(list))).catch(fail);
 }
 
 /** Immutable program update with an id generator that bumps `nextId`. */
@@ -199,17 +245,18 @@ export const storageLimit = MAX_KEYS;
 // ---------- Backup ----------
 
 export function exportJSON(): string {
-  return JSON.stringify({ v: 1, program: state.program, sessions: state.sessions.map((s) => ({ ...s })) });
+  return JSON.stringify({ v: 1, program: state.program, sessions: state.sessions, bodyweight: state.bodyweight });
 }
 
 export async function importJSON(text: string) {
-  const data = JSON.parse(text) as { program: Program; sessions: Session[] };
+  const data = JSON.parse(text) as { program: Program; sessions: Session[]; bodyweight?: BodyWeight[] };
   if (!data?.program?.days || !Array.isArray(data.sessions)) throw new Error('Неверный формат');
   const old = (await kv.keys()).filter((k) => k.startsWith(SESSION_PREFIX));
   await kv.remove(old);
   for (const s of data.sessions) await kv.set(s.key, packSession(s));
   await writeProgram(data.program);
-  set({ program: data.program, sessions: sortSessions(data.sessions) });
+  if (data.bodyweight) await writeChunked('b', packBodyweight(data.bodyweight));
+  set({ program: data.program, sessions: sortSessions(data.sessions), bodyweight: data.bodyweight ?? state.bodyweight });
   await refreshKeyCount();
 }
 

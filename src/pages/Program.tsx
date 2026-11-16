@@ -209,6 +209,13 @@ function ExerciseRow({
         />
         повт.
       </div>
+      <input
+        className="mt-2 w-full rounded-lg bg-bg px-2.5 py-1.5 text-sm text-fg outline-none placeholder:text-muted/50"
+        placeholder="📝 Заметка: настройки тренажёра, техника…"
+        value={ex.note ?? ''}
+        maxLength={140}
+        onChange={(e) => onChange((x) => (x.note = e.target.value || undefined))}
+      />
     </div>
   );
 }
