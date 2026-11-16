@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Card, Chip, Empty, Header, Stat } from '../components/ui';
-import { formatDate } from '../model';
+import { Card, Chip, Empty, Header, Input, Stat } from '../components/ui';
+import { formatDate, WEEKDAYS } from '../model';
 import { exerciseHistory, fmtW, records, type ExercisePoint } from '../stats';
 import { useStore } from '../store';
 
@@ -15,11 +15,19 @@ const METRICS: { id: Metric; label: string; unit: string }[] = [
 export default function StatsPage() {
   const { program, sessions } = useStore();
 
-  const exercises = useMemo(() => {
-    const all = program.days.flatMap((d) => d.exercises.map((e) => ({ ...e, dayName: d.name })));
+  const days = useMemo(() => [...program.days].sort((a, b) => a.weekday - b.weekday), [program]);
+
+  const allExercises = useMemo(() => {
+    const all = days.flatMap((d) => d.exercises.map((e) => ({ ...e, dayId: d.id, dayName: d.name, weekday: d.weekday })));
     const logged = new Set(sessions.flatMap((s) => Object.keys(s.sets)));
     return all.filter((e) => !e.archived || logged.has(e.id));
-  }, [program, sessions]);
+  }, [days, sessions]);
+
+  const [dayFilter, setDayFilter] = useState<string>('all');
+  const [query, setQuery] = useState('');
+  const exercises = allExercises.filter(
+    (e) => (dayFilter === 'all' || e.dayId === dayFilter) && e.name.toLowerCase().includes(query.trim().toLowerCase()),
+  );
 
   const [exId, setExId] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>('maxWeight');
@@ -31,7 +39,7 @@ export default function StatsPage() {
   const first = history[0];
   const delta = last && first && history.length > 1 ? last.maxWeight - first.maxWeight : 0;
 
-  if (!exercises.length) {
+  if (!allExercises.length) {
     return (
       <div className="fade-up">
         <Header title="Статистика" subtitle="Прогресс" />
@@ -46,13 +54,45 @@ export default function StatsPage() {
     <div className="fade-up">
       <Header title="Статистика" subtitle="Прогресс" />
 
+      <div className="relative mb-3">
+        <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <Input className="!pl-9" placeholder="Найти упражнение" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {query && (
+          <button onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 px-2 text-muted">
+            ✕
+          </button>
+        )}
+      </div>
+
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Тренировочный день</div>
       <div className="-mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none]">
-        {exercises.map((e) => (
-          <Chip key={e.id} active={selected?.id === e.id} onClick={() => setExId(e.id)}>
-            {e.name}
+        <Chip active={dayFilter === 'all'} onClick={() => setDayFilter('all')}>
+          Все
+        </Chip>
+        {days.map((d) => (
+          <Chip key={d.id} active={dayFilter === d.id} onClick={() => setDayFilter(d.id)}>
+            <span className="opacity-60">{WEEKDAYS[d.weekday - 1]}</span> {d.name}
           </Chip>
         ))}
       </div>
+
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
+        Упражнение <span className="normal-case tracking-normal">· {exercises.length}</span>
+      </div>
+      {exercises.length ? (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {exercises.map((e) => (
+            <Chip key={e.id} active={selected?.id === e.id} onClick={() => setExId(e.id)}>
+              {e.name}
+            </Chip>
+          ))}
+        </div>
+      ) : (
+        <div className="mb-4 rounded-2xl border border-dashed border-line py-6 text-center text-sm text-muted">Ничего не найдено</div>
+      )}
 
       {selected && (
         <>

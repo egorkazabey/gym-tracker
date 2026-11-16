@@ -5,6 +5,7 @@ import ProgramPage from './pages/Program';
 import StatsPage from './pages/Stats';
 import TodayPage from './pages/Today';
 import WorkoutPage from './pages/Workout';
+import { todayISO } from './model';
 import { clearError, loadAll, useStore } from './store';
 import { haptic, tg } from './tg';
 
@@ -21,6 +22,7 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
 export default function App() {
   const { loaded, error } = useStore();
   const [route, setRoute] = useState<Route>({ tab: 'today' });
+  const [selectedDate, setSelectedDate] = useState(todayISO());
 
   useEffect(() => {
     void loadAll();
@@ -75,7 +77,12 @@ export default function App() {
           />
         </>
       ) : route.tab === 'today' ? (
-        <TodayPage onStart={openWorkout} goProgram={() => setRoute({ tab: 'program' })} />
+        <TodayPage
+          onStart={openWorkout}
+          goProgram={() => setRoute({ tab: 'program' })}
+          selected={selectedDate}
+          onSelect={setSelectedDate}
+        />
       ) : route.tab === 'stats' ? (
         <StatsPage />
       ) : route.tab === 'history' ? (
