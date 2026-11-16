@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button, Card, Header } from '../components/ui';
 import { IconCheck, IconPlus, IconTimer, IconTrash } from '../components/icons';
-import { formatDate, round, sessionKey, WEEKDAYS_FULL, type Exercise, type Session, type SetEntry } from '../model';
-import { fmtW, lastSetsBefore, prevMaxWeight } from '../stats';
+import { formatDate, round, sessionKey, todayISO, WEEKDAYS_FULL, type Exercise, type Session, type SetEntry } from '../model';
+import { fmtW, lastSetsBefore, prevMaxWeight, sessionSummary, suggestWeight } from '../stats';
 import { deleteSession, getState, upsertSession, useStore } from '../store';
 import { confirmDialog, haptic, inTelegram, tg } from '../tg';
 
-const REST_SECONDS = 90;
+const REST_OPTIONS = [60, 90, 120, 180];
+const REST_KEY = 'gym_rest_sec';
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+function loadRest(): number {
+  try {
+    const v = Number(localStorage.getItem(REST_KEY));
+    return REST_OPTIONS.includes(v) ? v : 90;
+  } catch {
+    return 90;
+  }
+}
 
 export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; date: string; onDone: () => void }) {
   const { program, sessions } = useStore();
@@ -14,6 +26,20 @@ export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; da
   const key = sessionKey(date, dayId);
   const session = sessions.find((s) => s.key === key);
   const [restEnd, setRestEnd] = useState<number | null>(null);
+  const [restSec, setRestSec] = useState(loadRest);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const live = date === todayISO();
+
+  const cycleRest = () => {
+    const next = REST_OPTIONS[(REST_OPTIONS.indexOf(restSec) + 1) % REST_OPTIONS.length];
+    setRestSec(next);
+    haptic.select();
+    try {
+      localStorage.setItem(REST_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+  };
 
   const exercises: Exercise[] = day
     ? [
@@ -25,17 +51,26 @@ export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; da
 
   const update = (exId: string, fn: (sets: SetEntry[]) => SetEntry[]) => {
     const current: Session = getState().sessions.find((s) => s.key === key) ?? { key, date, dayId, sets: {}, done: false };
-    upsertSession({ ...current, sets: { ...current.sets, [exId]: fn([...(current.sets[exId] ?? [])]) } });
+    upsertSession({
+      ...current,
+      start: current.start ?? (live ? nowSec() : undefined),
+      sets: { ...current.sets, [exId]: fn([...(current.sets[exId] ?? [])]) },
+    });
   };
 
   const finish = () => {
     const current = getState().sessions.find((s) => s.key === key);
-    if (current) upsertSession({ ...current, done: true }, true);
+    const logged = current && Object.values(current.sets).some((x) => x.some(([w, r]) => w > 0 && r > 0));
+    if (current) upsertSession({ ...current, done: true, end: current.end ?? (live && current.start ? nowSec() : undefined) }, true);
     haptic.success();
-    onDone();
+    if (logged) {
+      tg?.MainButton.hide();
+      setRestEnd(null);
+      setSummaryOpen(true);
+    } else onDone();
   };
   const finishRef = useRef(finish);
-  finishRef.current = finish;
+  finishRef.current = summaryOpen ? () => {} : finish;
 
   useEffect(() => {
     if (!tg) return;
@@ -57,7 +92,18 @@ export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; da
 
   return (
     <div className="fade-up pb-28">
-      <Header title={day.name} subtitle={`${WEEKDAYS_FULL[wd - 1]} · ${formatDate(date)}`} />
+      <Header
+        title={day.name}
+        subtitle={`${WEEKDAYS_FULL[wd - 1]} · ${formatDate(date)}`}
+        right={
+          <button onClick={cycleRest} className="mb-1 flex items-center gap-1.5 rounded-full border border-line bg-card px-3 py-1.5 text-sm font-semibold">
+            <span className="text-accent">
+              <IconTimer />
+            </span>
+            <span className="num">{restSec < 120 ? `${restSec}с` : `${restSec / 60}м`}</span>
+          </button>
+        }
+      />
 
       <div className="space-y-3">
         {exercises.map((ex) => (
@@ -67,7 +113,7 @@ export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; da
             date={date}
             sets={session?.sets[ex.id] ?? []}
             update={(fn) => update(ex.id, fn)}
-            onSetDone={() => setRestEnd(Date.now() + REST_SECONDS * 1000)}
+            onSetDone={() => setRestEnd(Date.now() + restSec * 1000)}
           />
         ))}
       </div>
@@ -93,7 +139,9 @@ export default function WorkoutPage({ dayId, date, onDone }: { dayId: string; da
         </Button>
       )}
 
-      {restEnd && <RestTimer end={restEnd} onAdd={() => setRestEnd(restEnd + 30_000)} onClose={() => setRestEnd(null)} />}
+      {restEnd &&
+        createPortal(<RestTimer end={restEnd} onAdd={() => setRestEnd(restEnd + 30_000)} onClose={() => setRestEnd(null)} />, document.body)}
+      {summaryOpen && session && createPortal(<Summary session={session} dayName={day.name} onClose={onDone} />, document.body)}
     </div>
   );
 }
@@ -115,8 +163,10 @@ function ExerciseCard({
   const last = lastSetsBefore(sessions, ex.id, date);
   const prevMax = prevMaxWeight(sessions, ex.id, date);
   const rows = Math.max(ex.targetSets, sets.length);
+  const suggested = suggestWeight(last?.sets, ex.targetSets, ex.targetReps);
 
   const hint = (i: number): SetEntry | undefined => {
+    if (suggested && i < ex.targetSets) return [suggested, ex.targetReps];
     if (last?.sets[i]) return last.sets[i];
     // fallback: previous row in this session, or last set from last time
     const prevRow = sets[i - 1];
@@ -148,6 +198,15 @@ function ExerciseCard({
           </div>
         )}
       </div>
+
+      {suggested && (
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2 text-xs">
+          <span className="text-base">📈</span>
+          <span className="text-fg/80">
+            В прошлый раз все подходы по {ex.targetReps}+ — пора <b className="text-accent">{fmtW(suggested)} кг</b>
+          </span>
+        </div>
+      )}
 
       <div className="mb-1.5 grid grid-cols-[22px_1fr_14px_64px_38px] items-center gap-2 px-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
         <span>#</span>
@@ -345,6 +404,89 @@ function RestTimer({ end, onAdd, onClose }: { end: number; onAdd: () => void; on
         <button onClick={onClose} className="rounded-xl px-2 py-2 text-sm font-semibold text-muted">
           ✕
         </button>
+      </div>
+    </div>
+  );
+}
+
+function Summary({ session, dayName, onClose }: { session: Session; dayName: string; onClose: () => void }) {
+  const { sessions, program } = useStore();
+  const sum = sessionSummary(session, sessions);
+  const exName = new Map(program.days.flatMap((d) => d.exercises.map((e) => [e.id, e.name] as const)));
+  const diff = sum.prevVolume ? Math.round(((sum.volume - sum.prevVolume) / sum.prevVolume) * 100) : null;
+
+  useEffect(() => {
+    if (!tg) return;
+    tg.MainButton.setText('Готово');
+    tg.MainButton.onClick(onClose);
+    tg.MainButton.show();
+    return () => {
+      tg!.MainButton.offClick(onClose);
+      tg!.MainButton.hide();
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fade-up fixed inset-0 z-50 overflow-y-auto bg-bg/95 px-5 backdrop-blur-xl" style={{ paddingTop: 'max(32px, env(safe-area-inset-top))' }}>
+      <div className="mx-auto max-w-md pb-10">
+        <div className="relative mb-6 text-center">
+          <div className="pointer-events-none absolute left-1/2 top-0 h-40 w-40 -translate-x-1/2 rounded-full bg-accent/20 blur-3xl" />
+          <div className="relative text-6xl">{sum.prs.length ? '🏆' : '💪'}</div>
+          <div className="relative mt-3 text-[13px] font-semibold uppercase tracking-wider text-accent">Тренировка завершена</div>
+          <div className="relative mt-1 text-2xl font-extrabold">{dayName}</div>
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          <Big label="Объём" value={sum.volume.toLocaleString('ru-RU')} unit="кг" />
+          <Big label="Подходов" value={String(sum.sets)} />
+          <Big label="Упражнений" value={String(sum.exercises)} />
+          <Big label="Время" value={sum.durationMin != null ? String(sum.durationMin) : '—'} unit={sum.durationMin != null ? 'мин' : undefined} />
+        </div>
+
+        {diff != null && (
+          <Card className="mb-3 flex items-center justify-between">
+            <span className="text-sm text-muted">Объём к прошлому разу</span>
+            <span className={`num font-extrabold ${diff >= 0 ? 'text-accent' : 'text-danger'}`}>
+              {diff >= 0 ? '+' : ''}
+              {diff}%
+            </span>
+          </Card>
+        )}
+
+        {sum.prs.length > 0 && (
+          <Card className="mb-3">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Новые рекорды</div>
+            {sum.prs.map((p) => (
+              <div key={p.exId} className="flex items-center justify-between py-1.5">
+                <span className="font-semibold">{exName.get(p.exId)}</span>
+                <span className="num text-sm">
+                  <span className="text-muted line-through">{fmtW(p.prev)}</span>{' '}
+                  <span className="font-extrabold text-accent">
+                    {fmtW(p.weight)}×{p.reps}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {!inTelegram && (
+          <Button className="mt-3 w-full" onClick={onClose}>
+            Готово
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Big({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="rounded-2xl border border-line bg-card p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">{label}</div>
+      <div className="num mt-1 text-2xl font-extrabold">
+        {value}
+        {unit && <span className="ml-1 text-sm font-semibold text-muted">{unit}</span>}
       </div>
     </div>
   );

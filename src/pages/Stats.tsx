@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, Chip, Empty, Header, Input, Stat } from '../components/ui';
-import { formatDate, WEEKDAYS } from '../model';
-import { exerciseHistory, fmtW, records, type ExercisePoint } from '../stats';
+import { formatDate, todayISO, WEEKDAYS } from '../model';
+import { exerciseHistory, fmtW, records, sessionSummary, streakWeeks, valid, weeklyVolume, type ExercisePoint } from '../stats';
 import { useStore } from '../store';
 
 type Metric = 'maxWeight' | 'best1rm' | 'volume';
@@ -14,6 +14,7 @@ const METRICS: { id: Metric; label: string; unit: string }[] = [
 
 export default function StatsPage() {
   const { program, sessions } = useStore();
+  const [view, setView] = useState<'overview' | 'exercises'>('overview');
 
   const days = useMemo(() => [...program.days].sort((a, b) => a.weekday - b.weekday), [program]);
 
@@ -50,9 +51,39 @@ export default function StatsPage() {
 
   const m = METRICS.find((x) => x.id === metric)!;
 
+  const toggle = (
+    <div className="mb-4 flex gap-1 rounded-2xl border border-line bg-card p-1">
+      {(
+        [
+          ['overview', 'Обзор'],
+          ['exercises', 'Упражнения'],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          onClick={() => setView(id)}
+          className={`flex-1 rounded-xl py-2 text-sm font-bold transition ${view === id ? 'bg-accent text-black' : 'text-muted'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view === 'overview') {
+    return (
+      <div className="fade-up">
+        <Header title="Статистика" subtitle="Прогресс" />
+        {toggle}
+        <Overview />
+      </div>
+    );
+  }
+
   return (
     <div className="fade-up">
       <Header title="Статистика" subtitle="Прогресс" />
+      {toggle}
 
       <div className="relative mb-3">
         <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -199,4 +230,113 @@ function Chart({ data, metric, unit }: { data: ExercisePoint[]; metric: Metric; 
       </ResponsiveContainer>
     </div>
   );
+}
+
+function Overview() {
+  const { sessions, program } = useStore();
+  const today = todayISO();
+  const logged = sessions.filter((s) => Object.values(s.sets).some((x) => valid(x).length));
+  const streak = streakWeeks(sessions, today);
+  const weeks = weeklyVolume(sessions, today, 12);
+  const month = today.slice(0, 7);
+  const monthCount = logged.filter((s) => s.date.startsWith(month)).length;
+  const totalVolume = logged.reduce((a, s) => a + sessionSummary(s, []).volume, 0);
+  const exName = new Map(program.days.flatMap((d) => d.exercises.map((e) => [e.id, e.name] as const)));
+
+  const recentPRs = useMemo(
+    () =>
+      logged
+        .slice(0, 40)
+        .flatMap((s) => sessionSummary(s, sessions).prs.map((p) => ({ ...p, date: s.date })))
+        .slice(0, 6),
+    [logged, sessions],
+  );
+
+  if (!logged.length) {
+    return <Empty icon="🔥" title="Начни первую тренировку" text="После первой записанной тренировки здесь появятся стрик, объём по неделям и рекорды." />;
+  }
+
+  const fmtTons = (kg: number) => (kg >= 10000 ? `${(kg / 1000).toFixed(1)}` : kg.toLocaleString('ru-RU'));
+
+  return (
+    <div className="fade-up space-y-3">
+      <div className="relative overflow-hidden rounded-[24px] border border-accent/30 bg-gradient-to-br from-[#1c2410] via-card to-card p-5">
+        <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-accent/20 blur-3xl" />
+        <div className="flex items-center gap-4">
+          <div className="text-5xl">{streak ? '🔥' : '🧊'}</div>
+          <div>
+            <div className="num text-4xl font-extrabold leading-none">
+              {streak}
+              <span className="ml-1.5 text-base font-semibold text-muted">{plural(streak, 'неделя', 'недели', 'недель')}</span>
+            </div>
+            <div className="mt-1 text-sm text-muted">{streak ? 'подряд с тренировками — не сбавляй!' : 'Потренируйся на этой неделе, чтобы начать стрик'}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Всего" value={logged.length} />
+        <Stat label="В месяце" value={monthCount} />
+        <Stat label="Поднято" value={fmtTons(totalVolume)} unit={totalVolume >= 10000 ? 'т' : 'кг'} />
+      </div>
+
+      <Card>
+        <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">Объём по неделям</div>
+        <div className="text-sm text-muted">
+          Эта неделя: <span className="num font-bold text-fg">{weeks[weeks.length - 1].volume.toLocaleString('ru-RU')} кг</span>
+        </div>
+        <div className="-ml-3 mt-3 h-40">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={weeks.map((w) => ({ ...w, label: formatDate(w.week) }))} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke="#26262F" strokeDasharray="3 4" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: '#8A8A99', fontSize: 10 }} axisLine={false} tickLine={false} interval={2} />
+              <YAxis
+                tick={{ fill: '#8A8A99', fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+                tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}т` : String(v))}
+              />
+              <Tooltip
+                cursor={{ fill: '#ffffff08' }}
+                contentStyle={{ background: '#1E1E27', border: '1px solid #26262F', borderRadius: 12, color: '#F2F2F5' }}
+                labelStyle={{ color: '#8A8A99' }}
+                formatter={(v: number, _n, item) => [`${v.toLocaleString('ru-RU')} кг · ${item.payload.workouts} трен.`, '']}
+                separator=""
+              />
+              <Bar dataKey="volume" radius={[6, 6, 2, 2]}>
+                {weeks.map((w, i) => (
+                  <Cell key={w.week} fill={i === weeks.length - 1 ? '#C6F432' : '#C6F43255'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      {recentPRs.length > 0 && (
+        <Card className="!p-0">
+          <div className="px-4 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-muted">Последние рекорды 🏆</div>
+          {recentPRs.map((p) => (
+            <div key={`${p.date}-${p.exId}`} className="flex items-center gap-3 border-t border-line px-4 py-3">
+              <div className="w-14 shrink-0 text-sm text-muted">{formatDate(p.date)}</div>
+              <div className="min-w-0 flex-1 truncate font-semibold">{exName.get(p.exId) ?? 'Упражнение'}</div>
+              <div className="num text-sm">
+                <span className="font-extrabold text-accent">{fmtW(p.weight)}</span>
+                <span className="text-muted">×{p.reps}</span>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
 }

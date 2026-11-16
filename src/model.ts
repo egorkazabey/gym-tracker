@@ -26,6 +26,8 @@ export interface Session {
   dayId: string;
   sets: Record<string, SetEntry[]>;
   done: boolean;
+  start?: number; // unix seconds, first logged set
+  end?: number; // unix seconds, when finished
 }
 
 export const emptyProgram = (): Program => ({ days: [], nextId: 1 });
@@ -72,6 +74,8 @@ export function parseSessionKey(key: string): { date: string; dayId: string } | 
 interface PackedSession {
   x: Record<string, SetEntry[]>;
   f?: 1;
+  s?: number;
+  e?: number;
 }
 
 export function packSession(s: Session): string {
@@ -82,6 +86,8 @@ export function packSession(s: Session): string {
   }
   const packed: PackedSession = { x };
   if (s.done) packed.f = 1;
+  if (s.start) packed.s = s.start;
+  if (s.end) packed.e = s.end;
   return JSON.stringify(packed);
 }
 
@@ -90,7 +96,7 @@ export function unpackSession(key: string, raw: string): Session | null {
   if (!meta) return null;
   try {
     const p = JSON.parse(raw) as PackedSession;
-    return { key, date: meta.date, dayId: meta.dayId, sets: p.x ?? {}, done: p.f === 1 };
+    return { key, date: meta.date, dayId: meta.dayId, sets: p.x ?? {}, done: p.f === 1, start: p.s, end: p.e };
   } catch {
     return null;
   }

@@ -62,3 +62,31 @@ describe('stats', () => {
     expect(prevMaxWeight(sessions, 'e1', '2026-11-16')).toBe(70);
   });
 });
+
+import { sessionSummary, streakWeeks, suggestWeight, weeklyVolume } from './stats';
+
+describe('extras', () => {
+  it('summarises a session with PRs and previous volume', () => {
+    const s = { ...sessions[2], start: 1000, end: 1000 + 45 * 60 };
+    const sum = sessionSummary(s, sessions);
+    expect(sum.sets).toBe(2);
+    expect(sum.prs).toEqual([{ exId: 'e1', weight: 72.5, reps: 6, prev: 70 }]);
+    expect(sum.prevVolume).toBe(65 * 10 + 70 * 8);
+    expect(sum.durationMin).toBe(45);
+  });
+
+  it('suggests more weight only when all working sets hit target', () => {
+    expect(suggestWeight([[80, 8], [80, 8], [80, 9]], 3, 8)).toBe(82.5);
+    expect(suggestWeight([[80, 8], [80, 7], [80, 8]], 3, 8)).toBeNull();
+    expect(suggestWeight([[80, 8], [80, 8]], 3, 8)).toBeNull();
+  });
+
+  it('counts weekly streak and volume', () => {
+    expect(streakWeeks(sessions, '2026-11-18')).toBe(3);
+    expect(streakWeeks(sessions, '2026-11-25')).toBe(3);
+    expect(streakWeeks(sessions, '2026-12-02')).toBe(0);
+    const wv = weeklyVolume(sessions, '2026-11-18', 4);
+    expect(wv.map((w) => w.workouts)).toEqual([0, 1, 1, 1]);
+    expect(wv[3].week).toBe('2026-11-16');
+  });
+});

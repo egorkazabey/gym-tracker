@@ -89,3 +89,95 @@ export function prevMaxWeight(sessions: Session[], exId: string, beforeDate: str
 export function fmtW(w: number): string {
   return Number.isInteger(w) ? String(w) : w.toFixed(w * 10 === Math.round(w * 10) ? 1 : 2);
 }
+
+// ---------- Session summary ----------
+
+export interface SessionSummary {
+  sets: number;
+  volume: number;
+  exercises: number;
+  durationMin: number | null;
+  prs: { exId: string; weight: number; reps: number; prev: number }[];
+  prevVolume: number | null;
+}
+
+export function sessionSummary(session: Session, all: Session[]): SessionSummary {
+  let sets = 0;
+  let volume = 0;
+  let exercises = 0;
+  const prs: SessionSummary['prs'] = [];
+  for (const [exId, raw] of Object.entries(session.sets)) {
+    const v = valid(raw);
+    if (!v.length) continue;
+    exercises++;
+    sets += v.length;
+    volume += v.reduce((a, [w, r]) => a + w * r, 0);
+    const prev = prevMaxWeight(all, exId, session.date);
+    const top = v.reduce((a, b) => (b[0] > a[0] ? b : a));
+    if (prev > 0 && top[0] > prev) prs.push({ exId, weight: top[0], reps: top[1], prev });
+  }
+  const prevSame = all
+    .filter((s) => s.dayId === session.dayId && s.date < session.date)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const prevVolume = prevSame
+    ? Object.values(prevSame.sets).reduce((a, x) => a + valid(x).reduce((b, [w, r]) => b + w * r, 0), 0)
+    : null;
+  const durationMin = session.start && session.end && session.end > session.start ? Math.round((session.end - session.start) / 60) : null;
+  return { sets, volume: Math.round(volume), exercises, durationMin, prs, prevVolume: prevVolume ? Math.round(prevVolume) : null };
+}
+
+// ---------- Progressive overload ----------
+
+/** If every planned set hit the target reps at the same top weight last time, suggest adding weight. */
+export function suggestWeight(last: SetEntry[] | undefined, targetSets: number, targetReps: number, step = 2.5): number | null {
+  const v = valid(last);
+  if (v.length < targetSets) return null;
+  const top = Math.max(...v.map(([w]) => w));
+  const working = v.filter(([w]) => w === top);
+  if (working.length < targetSets) return null;
+  return working.every(([, r]) => r >= targetReps) ? Math.round((top + step) * 100) / 100 : null;
+}
+
+// ---------- Overview ----------
+
+function mondayOf(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function shiftISO(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+const isLogged = (s: Session) => Object.values(s.sets).some((x) => valid(x).length);
+
+/** Total volume per week (oldest first), for the last `weeks` weeks ending with the week of `today`. */
+export function weeklyVolume(sessions: Session[], today: string, weeks = 12): { week: string; volume: number; workouts: number }[] {
+  const start = shiftISO(mondayOf(today), -7 * (weeks - 1));
+  const out = Array.from({ length: weeks }, (_, i) => ({ week: shiftISO(start, i * 7), volume: 0, workouts: 0 }));
+  for (const s of sessions) {
+    if (!isLogged(s)) continue;
+    const idx = out.findIndex((w) => w.week === mondayOf(s.date));
+    if (idx < 0) continue;
+    out[idx].workouts++;
+    out[idx].volume += Math.round(Object.values(s.sets).reduce((a, x) => a + valid(x).reduce((b, [w, r]) => b + w * r, 0), 0));
+  }
+  return out;
+}
+
+/** Consecutive weeks with at least one workout. The current week counts only if it already has one. */
+export function streakWeeks(sessions: Session[], today: string): number {
+  const weeks = new Set(sessions.filter(isLogged).map((s) => mondayOf(s.date)));
+  let w = mondayOf(today);
+  if (!weeks.has(w)) w = shiftISO(w, -7);
+  let n = 0;
+  while (weeks.has(w)) {
+    n++;
+    w = shiftISO(w, -7);
+  }
+  return n;
+}
